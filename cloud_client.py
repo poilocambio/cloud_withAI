@@ -9,8 +9,16 @@ client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 client_socket.settimeout(10)  # timeout 10 secondi su operazioni di ricezione
 client_socket.connect((HOST, PORT))
 
+def safe_recv(size=1024):
+    """Recv con gestione timeout"""
+    try:
+        return client_socket.recv(size)
+    except socket.timeout:
+        print("[ATTENZIONE] Timeout: il server non ha risposto")
+        return b""
+
 def receive_prompt():
-    data = client_socket.recv(1024).decode()
+    data = safe_recv().decode()
     print(data, end="")
 
 # ----------------- LOGIN -----------------
@@ -23,7 +31,7 @@ password = input()
 client_socket.send(password.encode())
 
 # riceve esito login
-data = client_socket.recv(1024).decode()
+data = safe_recv().decode()
 print(data)
 
 if "fallito" in data:
@@ -32,7 +40,7 @@ if "fallito" in data:
 
 # ----------------- LOOP COMANDI -----------------
 while True:
-    prompt = client_socket.recv(1024).decode()
+    prompt = safe_recv().decode()
     command = input(prompt + "> ")
     client_socket.send(command.encode())
 
@@ -48,19 +56,21 @@ while True:
             print("File non trovato.")
             continue
 
-        client_socket.recv(1024)  # messaggio "Pronto a ricevere il file"
+        safe_recv()  # messaggio "Pronto a ricevere il file"
 
         filesize = os.path.getsize(filename)
         client_socket.send(struct.pack(">Q", filesize))  # invia lunghezza file 8 byte
 
+        sent = 0
         with open(filename, "rb") as f:
-            while True:
+            while sent < filesize:
                 chunk = f.read(1024)
                 if not chunk:
                     break
                 client_socket.sendall(chunk)
+                sent += len(chunk)
 
-        print(client_socket.recv(1024).decode())
+        print(safe_recv().decode())
 
     # ----------------- DOWNLOAD -----------------
     elif cmd_type == "DOWNLOAD":
@@ -69,38 +79,41 @@ while True:
             continue
         filename = command.split()[1]
 
-        response = client_socket.recv(1024).decode()
+        response = safe_recv().decode()
         print(response)
         if "File non trovato" in response:
             continue
 
-        # legge prima i primi 8 byte con la lunghezza del file
-        raw_filesize = client_socket.recv(8)
+        # legge i primi 8 byte con la lunghezza del file
+        raw_filesize = safe_recv(8)
+        if not raw_filesize:
+            print("[ERRORE] Non è stato possibile leggere la dimensione del file")
+            continue
         filesize = struct.unpack(">Q", raw_filesize)[0]
 
         received = 0
         with open(filename, "wb") as f:
             while received < filesize:
-                chunk = client_socket.recv(min(1024, filesize - received))
+                chunk = safe_recv(min(1024, filesize - received))
                 if not chunk:
                     break
                 f.write(chunk)
                 received += len(chunk)
 
-        print(client_socket.recv(1024).decode())
+        print(safe_recv().decode())
 
     # ----------------- LIST -----------------
     elif cmd_type == "LIST":
-        files = client_socket.recv(1024).decode()
+        files = safe_recv().decode()
         print(files)
 
     # ----------------- EXIT -----------------
     elif cmd_type == "EXIT":
-        print(client_socket.recv(1024).decode())
+        print(safe_recv().decode())
         break
 
     # ----------------- COMANDO NON RICONOSCIUTO -----------------
     else:
-        print(client_socket.recv(1024).decode())
+        print(safe_recv().decode())
 
 client_socket.close()
