@@ -1,17 +1,19 @@
 import socket
 import os
+import struct  # per lunghezza file
 
 HOST = input("Inserisci l'IP del server: ")
 PORT = 5001
 
 client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+client_socket.settimeout(10)  # timeout 10 secondi su operazioni di ricezione
 client_socket.connect((HOST, PORT))
 
 def receive_prompt():
     data = client_socket.recv(1024).decode()
     print(data, end="")
 
-# login
+# ----------------- LOGIN -----------------
 receive_prompt()
 username = input()
 client_socket.send(username.encode())
@@ -28,7 +30,7 @@ if "fallito" in data:
     client_socket.close()
     exit()
 
-# loop comandi
+# ----------------- LOOP COMANDI -----------------
 while True:
     prompt = client_socket.recv(1024).decode()
     command = input(prompt + "> ")
@@ -36,6 +38,7 @@ while True:
 
     cmd_type = command.split()[0].upper()
 
+    # ----------------- UPLOAD -----------------
     if cmd_type == "UPLOAD":
         if len(command.split()) < 2:
             print("Specifica il file da caricare.")
@@ -44,42 +47,59 @@ while True:
         if not os.path.exists(filename):
             print("File non trovato.")
             continue
-        client_socket.recv(1024)  # messaggio pronto
+
+        client_socket.recv(1024)  # messaggio "Pronto a ricevere il file"
+
+        filesize = os.path.getsize(filename)
+        client_socket.send(struct.pack(">Q", filesize))  # invia lunghezza file 8 byte
+
         with open(filename, "rb") as f:
             while True:
-                bytes_read = f.read(1024)
-                if not bytes_read:
+                chunk = f.read(1024)
+                if not chunk:
                     break
-                client_socket.send(bytes_read)
-            client_socket.send(b"<END>")
+                client_socket.sendall(chunk)
+
         print(client_socket.recv(1024).decode())
 
+    # ----------------- DOWNLOAD -----------------
     elif cmd_type == "DOWNLOAD":
         if len(command.split()) < 2:
             print("Specifica il file da scaricare.")
             continue
         filename = command.split()[1]
+
         response = client_socket.recv(1024).decode()
         print(response)
         if "File non trovato" in response:
             continue
+
+        # legge prima i primi 8 byte con la lunghezza del file
+        raw_filesize = client_socket.recv(8)
+        filesize = struct.unpack(">Q", raw_filesize)[0]
+
+        received = 0
         with open(filename, "wb") as f:
-            while True:
-                bytes_read = client_socket.recv(1024)
-                if bytes_read.endswith(b"<END>"):
-                    f.write(bytes_read[:-5])
+            while received < filesize:
+                chunk = client_socket.recv(min(1024, filesize - received))
+                if not chunk:
                     break
-                f.write(bytes_read)
+                f.write(chunk)
+                received += len(chunk)
+
         print(client_socket.recv(1024).decode())
 
+    # ----------------- LIST -----------------
     elif cmd_type == "LIST":
         files = client_socket.recv(1024).decode()
         print(files)
 
+    # ----------------- EXIT -----------------
     elif cmd_type == "EXIT":
         print(client_socket.recv(1024).decode())
         break
 
+    # ----------------- COMANDO NON RICONOSCIUTO -----------------
     else:
         print(client_socket.recv(1024).decode())
 
