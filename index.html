@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<title>Mini Cloud</title>
+
+<style>
+body {
+    font-family: Arial, sans-serif;
+    background: #f4f4f4;
+    margin: 0;
+    padding: 10px;
+}
+
+.container {
+    max-width: 600px;
+    margin: auto;
+    background: white;
+    padding: 15px;
+    border-radius: 6px;
+}
+
+h2 {
+    text-align: center;
+}
+
+input, button {
+    width: 100%;
+    padding: 10px;
+    margin-top: 8px;
+    font-size: 16px;
+}
+
+button {
+    background: #007bff;
+    color: white;
+    border: none;
+    border-radius: 4px;
+}
+
+button:hover {
+    background: #0056b3;
+}
+
+pre {
+    background: #000;
+    color: #0f0;
+    padding: 10px;
+    height: 200px;
+    overflow-y: auto;
+    font-size: 13px;
+}
+
+.hidden {
+    display: none;
+}
+</style>
+</head>
+
+<body>
+<div class="container">
+    <h2>Mini Cloud</h2>
+
+    <!-- LOGIN -->
+    <div id="login">
+        <input id="username" placeholder="Username">
+        <input id="password" type="password" placeholder="Password">
+        <button onclick="sendLogin()">Login</button>
+    </div>
+
+    <!-- COMANDI -->
+    <div id="panel" class="hidden">
+        <button onclick="sendCommand('LIST')">LIST</button>
+
+        <input type="file" id="fileInput">
+        <button onclick="uploadFile()">UPLOAD</button>
+
+        <input id="downloadName" placeholder="Nome file da scaricare">
+        <button onclick="downloadFile()">DOWNLOAD</button>
+
+        <button onclick="sendCommand('EXIT')">EXIT</button>
+    </div>
+
+    <pre id="output"></pre>
+</div>
+
+<script>
+let ws;
+let currentDownload = null;
+let downloadSize = 0;
+let received = 0;
+
+// ===== CONNESSIONE =====
+function connect() {
+    ws = new WebSocket(`ws://${location.hostname}:8080`);
+    ws.binaryType = "arraybuffer";
+
+    ws.onmessage = handleMessage;
+    ws.onopen = () => log("[WebSocket connesso]");
+    ws.onclose = () => log("[WebSocket chiuso]");
+}
+
+connect();
+
+// ===== LOG =====
+function log(msg) {
+    const out = document.getElementById("output");
+    out.textContent += msg + "\n";
+    out.scrollTop = out.scrollHeight;
+}
+
+// ===== LOGIN =====
+function sendLogin() {
+    ws.send(document.getElementById("username").value);
+    ws.send(document.getElementById("password").value);
+
+    document.getElementById("login").classList.add("hidden");
+    document.getElementById("panel").classList.remove("hidden");
+}
+
+// ===== COMANDI =====
+function sendCommand(cmd) {
+    ws.send(cmd);
+}
+
+// ===== UPLOAD =====
+function uploadFile() {
+    const file = document.getElementById("fileInput").files[0];
+    if (!file) return;
+
+    ws.send("UPLOAD " + file.name);
+
+    const reader = new FileReader();
+    reader.onload = () => {
+        const buffer = reader.result;
+        const size = buffer.byteLength;
+
+        // invia filesize (8 byte, big endian)
+        const sizeBuf = new ArrayBuffer(8);
+        const view = new DataView(sizeBuf);
+        view.setBigUint64(0, BigInt(size), false);
+        ws.send(sizeBuf);
+
+        ws.send(buffer);
+    };
+
+    reader.readAsArrayBuffer(file);
+}
+
+// ===== DOWNLOAD =====
+function downloadFile() {
+    const name = document.getElementById("downloadName").value;
+    if (!name) return;
+
+    currentDownload = name;
+    received = 0;
+    downloadSize = 0;
+
+    ws.send("DOWNLOAD " + name);
+}
+
+// ===== RICEZIONE =====
+function handleMessage(event) {
+    if (typeof event.data === "string") {
+        log(event.data);
+    } else {
+        handleBinary(event.data);
+    }
+}
+
+// ===== BINARIO =====
+function handleBinary(buffer) {
+    if (downloadSize === 0) {
+        // primi 8 byte = dimensione file
+        const view = new DataView(buffer);
+        downloadSize = Number(view.getBigUint64(0, false));
+        currentData = [];
+        return;
+    }
+
+    currentData.push(new Uint8Array(buffer));
+    received += buffer.byteLength;
+
+    if (received >= downloadSize) {
+        const blob = new Blob(currentData);
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = currentDownload;
+        a.click();
+
+        log("Download completato: " + currentDownload);
+        downloadSize = 0;
+    }
+}
+</script>
+</body>
+</html>
